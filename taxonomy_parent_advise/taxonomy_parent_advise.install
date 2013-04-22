@@ -1,0 +1,53 @@
+<?php
+/*
+ * @file
+ * Installing extention for taxonomy with with parential index.
+ */
+
+/*
+ * Implements hook_install().
+ */
+function taxonomy_parent_advise_install() {
+   $spec = array(
+    'type' => 'varchar',
+    'length' => 255,
+    'not null' => TRUE,
+    'default' => '',
+    'description' => 'The index of the filed containing parents tids.',
+  );
+  db_add_field('taxonomy_term_data', 'index_trail', $spec);
+}
+
+
+/*
+ * Implements hook_uninstall().
+ */
+function taxonomy_parent_advise_uninstall() {
+  db_drop_field('taxonomy_term_data', 'index_trail');
+}
+
+/**
+ * Implements hook_schema_alter().
+ */
+function taxonomy_parent_advise_schema_alter(&$schema) {
+  $schema['taxonomy_term_data']['fields']['index_trail'] = array(
+    'type' => 'varchar',
+    'length' => 255,
+    'not null' => TRUE,
+    'default' => '',
+    'description' => 'The index of the filed containing parents tids.',
+  );
+
+  return $schema;
+}
+
+
+
+/**
+ * Add owner uid field to product.
+ */
+/*
+function taxonomy_parent_advise_update_7000() {
+
+}
+*/

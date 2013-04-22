@@ -1,0 +1,163 @@
+<?php
+/*
+ * @file
+ * Extending taxonomy with with parential index
+ */
+
+/*
+ * Implements hook_help().
+ */
+function taxonomy_parent_advise_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#taxonomy_parent_advise':
+      $output = file_get_contents(drupal_get_path('module', 'taxonomy_parent_advise') .'/README.txt');
+      return module_exists('markdown') ? filter_xss_admin(module_invoke('markdown', 'filter', 'process', 0, -1, $output)) : '<pre>'. check_plain($output) .'</pre>';
+  }
+}
+
+/*
+ * Implements hook_menu().
+ */
+function taxonomy_parent_advise_menu() {
+    $items['admin/taxonomy/parental/reindex'] = array(
+      'title' => 'Indexing all taxonomy terms',
+      'description' => 'Perform reindex operation on all taxonomy terms.',
+      'page callback' => 'taxonomy_parent_advise_index_all',
+      'page arguments' => array(),
+      'access arguments' => array('access administration pages'),
+      'type' => MENU_NORMAL_ITEM,
+    );
+
+	return $items;
+}
+
+/*
+ * Implements hook_taxonomy_term_insert().
+ */
+function taxonomy_parent_advise_taxonomy_term_insert($term) {
+	// @todo: Check if indexing was enabled
+	//
+	
+	//$current_term = 
+	// Variables setup
+	$tid = $term->tid;
+	$parentid = array(null);
+	$indexTrail = "";
+
+	if (is_array($term->parent) && count(($term->parent))) {
+		$parentid = array_keys($term->parent);
+	}
+	if ($tid) { // if term id defined
+		$indexTrail = $tid;
+	}
+	if ($parentid[0]) { // if has parent or parents
+
+		$currentParent = $parentid[0];
+		$indexTrail =  $currentParent . '|' . $indexTrail;
+
+		// @todo chek for previous parents
+		while ($currentParent) {
+			
+
+			// dpm($currentParent);
+			$parents = array_keys(taxonomy_get_parents((int)$currentParent));
+			// dpm($parents);
+			$currentParent = null;
+
+			if (is_array($parents) && count($parents)) {
+				$currentParent = $parents[0];
+				$indexTrail =  $currentParent . '|' . $indexTrail;
+			}
+			// if ($currentParent) {
+			// 	$parentKeys = array_keys($parent);
+			// 	if (is_array($parentKeys) && count($parentKeys)) {
+			// 		$parentKeys = $parentKeys[0];
+			// 	}
+			// }
+			
+		}
+	}
+	if (($term->index_trail != $indexTrail)) {
+		//dpm(array($term));
+		db_update('taxonomy_term_data')
+		    ->fields(array(
+					'index_trail' => $indexTrail,
+				))
+		    ->condition('tid', $tid)
+		    ->execute();
+	}
+	//dpm($term);
+}
+
+/*
+ * Implements hook_taxonomy_term_update().
+ */
+
+function taxonomy_parent_advise_taxonomy_term_update($term) {
+	taxonomy_parent_advise_taxonomy_term_insert($term);
+}
+
+/**
+ * Implements hook_views_api().
+ */
+function taxonomy_parent_advise_views_api() {
+  return array(
+    'api' => 3,
+    'path' => drupal_get_path('module', 'taxonomy_parent_advise') . '/views',
+  );
+}
+
+/**
+ * Indexes all taxonomy terms.
+ */
+function taxonomy_parent_advise_index_all() {
+
+	
+    $query = db_select('taxonomy_term_data', 'ttd');
+	$query->fields('ttd',array('tid'));
+	$result = $query->execute()->fetchAllAssoc('tid');
+
+    $operations = array();
+    $termKeys = array_keys($result);
+    foreach($termKeys as $termKey) {
+		$operations[] = array('taxonomy_parent_advise_index_term', array($termKey));
+    }
+
+	// Create the batch
+	$batch = array(
+		'title' => t('Indexing taxonomy terms'),
+		'operations' => $operations,
+		'progress_message' => t('Current: @current | Remaining: @remaining | Progress: @total  (@percentage % complete)'),
+		'init_message' => t('Preparing to index taxonomy terms.'),
+		'finished' => 'taxonomy_parent_advise_index_complete',
+	);
+
+	batch_set($batch);
+    batch_process('admin/structure/taxonomy');
+}
+
+/**  
+ *  Taxonomy reindexing single term
+ * 
+ * @param $tid
+ *    Integer - term id to be processed.
+ */
+function taxonomy_parent_advise_index_term($tid) {
+	// @todo: optimise load
+	$term = taxonomy_term_load($tid);
+	$parents = array_keys(taxonomy_get_parents($tid));
+	$term->parent = array();
+	foreach ($parents as $parent) {
+		$term->parent = array($parent => $parent);
+	}
+	// dpm($term);
+	taxonomy_parent_advise_taxonomy_term_insert($term);
+}
+
+/**  
+ *  Finishing taxonomy reindexing
+ */
+function taxonomy_parent_advise_index_complete($success, $results, $operations) {
+	drupal_set_message("Taxonomy term index complete");
+    drupal_goto('admin/structure/taxonomy');
+}

@@ -1,0 +1,11 @@
+name = Taxonomy Parental Advise
+description = Indexing parental items.
+package = Taxonomy
+core = 7.x
+version = 7.x-1.0
+
+dependencies[] = taxonomy
+
+files[] = views/taxonomy_parent_advise.views.inc
+files[] = views/views_handler_relationship_term_index_trail.inc
+;files[] = views/views_join_fcl_destination.inc
