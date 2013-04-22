@@ -1,0 +1,5 @@
+git branch --track develop origin/develop
+git pull origin develop
+git checkout develop
+git pull origin fcl_procat_product_entites_help
+git push origin develop
