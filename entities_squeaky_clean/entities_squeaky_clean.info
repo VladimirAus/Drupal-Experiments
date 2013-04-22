@@ -1,0 +1,5 @@
+name = Entities Squeaky Clean
+description = Representation of FCL procat products using Entities.
+package = Development
+core = 7.x
+version = 1.0-alpha1

@@ -1,0 +1,1817 @@
+<?php
+
+  include_once('FCLFeedImporter.inc');
+  
+  // @TODO - remove benchmarking.
+  include_once('benchmarking.php');
+  include_once(drupal_get_path('fcl_procat_product_import', 'modernizr') . 'benchmarking.php');
+
+/**
+ * @file
+ *
+ * Import FCL lists - admin form and custom actions.
+ */
+
+  function fcl_procat_product_import_menu() {
+
+
+    $items['fcl_import/batch/lists/%'] = array(
+      'page callback' => 'fcl_procat_product_import_batch_lists',
+      'page arguments' => array(3),
+      'access arguments' => array('access administration pages'),
+    );
+
+    $items['fcl_import/download/products'] = array(
+      'page callback' => 'fcl_procat_product_import_import_products',
+      'page arguments' => array(false),
+      'access arguments' => array('access administration pages'),
+    );
+
+    $items['fcl_import/delete/%/%'] = array(
+      'page callback' => 'fcl_procat_product_import_delete_entities',
+      'page arguments' => array(2,3),
+      'access arguments' => array('access administration pages'),
+    );
+    
+    $items['admin/fcl/procat_product_import'] = array(
+      'title' => 'FCL product import',
+      'description' => 'Configuration for FCL product import',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('fcl_procat_product_import_admin_form'),
+      'access arguments' => array('access administration pages'),
+      'type' => MENU_NORMAL_ITEM,
+    );
+    
+    $items['fcl_import/reset/vars'] = array(
+      'page callback' => 'fcl_procat_product_import_reset_vars',
+      'page arguments' => array(),
+      'access arguments' => array('access administration pages'),
+    );
+
+    return $items;
+  }
+
+  /**
+  * Page callback: Current posts settings
+  *
+  * @see fcl_procat_product_import_menu()
+  */
+  function fcl_procat_product_import_admin_form($form, &$form_state) {
+  
+    global $base_url;
+    
+    $lastrun_product = variable_get('fcl_procat_product_import_period_product_lastimport', array());
+    $lastrun_lists = variable_get('fcl_procat_product_import_period_list_lastimport', 0);
+
+    $form['product_import'] = array(
+      '#type' => 'vertical_tabs',
+    );
+     
+
+    $form['product'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Product Import'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+      '#group' => 'product_import',
+    );
+
+    $form['lists'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Lists Import'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+      '#group' => 'product_import',
+    );
+
+    $form['import_settings'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Product Import Settings'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+      '#group' => 'product_import',
+    );
+
+    $form['periodic_import_settings'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Periodic imports'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+      '#group' => 'product_import',
+    );    
+
+    /* PRODUCT IMPORT OPTIONS START */
+
+
+    /* PRODUCT IMPORT OPTIONS START */
+    $form['import_settings']['separator_import_product'] = array(
+      '#type' => 'item',
+      '#title' => t('<h3>Product import options</h3>'),
+      '#markup' => t('<hr>'),
+    );
+     
+    // @todo put the default back in:   'http://data.fclmedia.com/nzweb-longtimeout/query'
+
+    $form['import_settings']['fcl_procat_product_import_product_url_prefix'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Product feed URL prefix'),
+      '#default_value' => variable_get('fcl_procat_product_import_product_url_prefix', 'http://data.fclmedia.com/nzweb-longtimeout/query'),
+      '#description' => t('First part of the URL to fetch products. "http://data.fclmedia.com/nzweb-longtimeout/query" by default'),
+      '#required' => TRUE,
+    );
+
+    // get vocab
+    $vocab = taxonomy_vocabulary_machine_name_load('fcl_product_consumer'); 
+    $options = array();
+    if (!empty($vocab)) {
+      $terms = taxonomy_get_tree($vocab->vid);
+
+      foreach ($terms as $term) {
+        $options = array_merge($options, array($term->name => $term->name));
+      }
+    }
+    
+    // add terms to array
+    //https://answers.launchpad.net/ubuntu/+source/apt/+question/171188
+    if (count($options)) {
+      $form['import_settings']['fcl_procat_product_import_products_consumer'] = array(
+       '#type' => 'select',
+       '#title' => t('Consumer to import'),
+       '#options' => $options,
+       '#default_value' => variable_get('fcl_procat_product_import_products_consumer', 'CorporateTravellerAUAllProd'),
+       '#description' => t('Set the consumer to be imported.'),
+     );
+    }
+
+    $form['import_settings']['fcl_procat_product_import_products_no_per_batch'] = array(
+      '#type' => 'textfield',
+      '#title' => t('No of products per batch'),
+      '#default_value' => variable_get('fcl_procat_product_import_products_no_per_batch', '20'),
+      '#size' => 5,
+      '#maxlength' => 5,
+      '#description' => t('Split import into batches of how many items.'),
+      '#required' => FALSE,
+    );
+
+
+    $form['import_settings']['fcl_procat_product_import_product_option'] = array(
+      '#type' => 'radios',
+      '#title' => t('Product import options'),
+      '#options' => array('skulist' => 'Use skuList service', 'query' => 'Custom query (from FC query builder)' ),
+      '#default_value' => variable_get('fcl_procat_product_import_product_option', 'skulist'),
+      '#description' => t('Specify type of product import'),
+      '#required' => TRUE,
+    );
+
+    $form['import_settings']['skulist'] = array(
+     '#type' => 'fieldset', 
+      '#title' => t('Skulist import options'), 
+      '#states' => array(
+        'visible' => array('input[name="fcl_procat_product_import_product_option"]' => array('value' => 'skulist')),
+      )
+    );
+
+    $form['import_settings']['query'] = array(
+     '#type' => 'fieldset', 
+      '#title' => t('Query import options'), 
+      '#states' => array(
+        'visible' => array('input[name="fcl_procat_product_import_product_option"]' => array('value' => 'query')),
+      ),
+    );
+
+    $form['import_settings']['skulist']['fcl_procat_product_import_product_skulist_info'] = array(
+     '#type' => 'item',
+     '#markup' => 'The <em>skuList</em> service is the default means by which we get products into Drupal.  We query Procat directly for a list of skus matching our criteria - which takes into account the consumer, the settings below and when the last product import was run.<br>' .
+        _fcl_procat_product_get_last_import_run_text( $lastrun_product ) .
+       '<br>Caching of the sitecat query results is implemented to reduce the number of sitecat queries accross all brands.',
+    );
+
+    $form['import_settings']['skulist']['fcl_procat_product_import_product_skulist'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Product skuList service url'),
+      '#default_value' => variable_get('fcl_procat_product_import_product_skulist', 'https://list:ZXvC13!@data.fclmedia.com/pct/rest/list/product/skuList'),
+      '#description' => t('URL to retrieve the full list of SKUs "https://list:ZXvC13!@data.fclmedia.com/pct/rest/list/product/skuList" by default'),
+      '#required' => TRUE,
+
+    );
+
+    $defaultpath = $_SERVER['DOCUMENT_ROOT'] . '/sites/default/files/product-import-cache' ;
+    $form['import_settings']['skulist']['fcl_procat_product_import_cache_location'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Product import cache path'),
+      '#default_value' => variable_get('fcl_procat_product_import_cache_location',  $defaultpath),
+      '#description' => t('The path for the common drupal product import cache path "'. $defaultpath.'" by default'),
+      '#required' => FALSE,
+    );
+
+    $form['import_settings']['skulist']['fcl_procat_product_import_cache_max_age'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Sitecat response caching max age (in seconds)'),
+      '#default_value' => variable_get('fcl_procat_product_import_cache_max_age',  60*60),
+      '#description' => t('A measure of how stale the cached sitecat results can be to satsify the import, without the need for further Sitecat queries.  In practise, this should be no more than 24 hours (86400 seconds).'),
+      '#required' => FALSE,
+    );
+   
+    $expiresOptions = array(
+      date('Ymd040000', time()) => 'Today',
+      date('Ymd040000', strtotime("-7 days")) =>  '1 week ago',
+      date('Ymd040000', strtotime("-14 days")) => '2 weeks ago',
+      date('Ymd040000', strtotime("-1 month")) => '1 month ago',
+      date('Ymd040000', strtotime("-3 months")) =>'3 months ago',
+      date('Ymd040000', strtotime("-6 months")) =>'6 months ago',
+    );
+
+    $form['import_settings']['skulist']['fcl_procat_product_import_product_expires_after'] = array(
+       '#type' => 'select',
+       '#title' => t('Get products that expire after'),
+       '#options' => $expiresOptions,
+       '#default_value' => variable_get('fcl_procat_product_import_product_expires_after', date('Ymd040000', time()) ),
+       '#description' => t('Choose <strong>Today</strong> to get just published and prepublished products (this only applies to initial import).'),
+    );
+
+
+    $form['import_settings']['query']['fcl_procat_product_import_products_max_number'] = array(
+      '#type' => 'textfield',
+      '#title' => t('No of products to import'),
+      '#default_value' => variable_get('fcl_procat_product_import_products_max_number', '500'),
+      '#size' => 5,
+      '#maxlength' => 5,
+      '#description' => t('Maximum number of products to import'),
+      '#required' => FALSE,
+    );
+
+    $form['import_settings']['query']['fcl_procat_product_import_products_extra_query'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Extra query parameters'),
+      '#default_value' => variable_get('fcl_procat_product_import_products_extra_query', 'Product'),
+      '#description' => t('Default is "Product". To limit results use '.l('query builder','http://www.flightcentre.com.au/global-images/query-preview/').'.<br /><u>Example:</u> <i>product_category is "Air Transportation" and destination is "Sydney","Brisbane" and air_ex_point is "Sydney"</i><br /><u>Example:</u> <i>sku:123456,123457</i>'),
+      '#required' => FALSE,
+    );
+
+    // Image settings
+    $form['import_settings']['fcl_procat_product_import_image_download_policy'] = array(
+      '#type' => 'radios',
+      '#title' => t('Image download policy'),
+      '#options' => array('import' => 'During product import', 'pageview' => 'During page view (after import)'),
+      '#default_value' => variable_get('fcl_procat_product_import_image_download_policy', 'pageview'),
+      '#description' => t('When "page view" option is selected, the images will be stored only as references and will be downloaded once this particualr node will be loaded.'),
+      '#required' => TRUE,
+    );    // Create generic FCL landing page
+  
+    $items['admin/fcl'] = array(
+      'title' => 'FCL Config',
+      'description' => 'FCL config and tools.',
+      'position' => 'right',
+      'weight' => -10,
+      'page callback' => 'system_admin_menu_block_page',
+      'access arguments' => array('access administration pages'),
+      'file path' => drupal_get_path('module', 'system'),
+      'file' => 'system.admin.inc',
+    );
+
+    $form['import_settings']['fcl_procat_product_import_custom_image'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Custom fields: Image URL prefix'),
+      '#default_value' => variable_get('fcl_procat_product_import_custom_image_prefix', 'http://www.fclmedia.com'),
+      //'#size' => 2,
+      //'#maxlength' => 2,
+      '#description' => t('URL prefix for images to import. No trailing slash.'),
+      '#required' => FALSE,
+    );
+
+    $form['import_settings']['fcl_procat_product_import_product_url_alias'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Product URL alias'),
+      '#default_value' => variable_get('fcl_procat_product_import_product_url_alias', 'product/[sku]'),
+      //'#size' => 2,
+      //'#maxlength' => 2,
+      '#description' => t('URL alias for newly created or updated products.<br />Tokens to use: <strong>[pid], [title], [sku], [destination_tid], [destination_name]</strong>'),
+      '#required' => FALSE,
+    );
+
+    $form['import_settings']['fcl_procat_product_import_disable_modules_list'] = array(
+      '#type' => 'textarea',
+      '#title' => t('List of modules to disable during import'),
+      '#default_value' => variable_get('fcl_procat_product_import_disable_modules_list', ''),
+      '#description' => t('Dependant modules will be added automatically'),
+      '#required' => FALSE,
+    );
+
+    $form['import_settings']['fcl_procat_product_import_email_admin'] = array(
+      '#type' => 'radios',
+      '#title' => t('Email administrator'),
+      '#options' => array('1' => 'Yes', '0' => 'No'),
+      '#default_value' => variable_get('fcl_procat_product_import_email_admin', '0'),
+      '#description' => t('Every import will trigger email to system administrators to <i>dl.online.web.admin@flightcentre.com.au</i>'),
+      '#required' => TRUE,
+    );
+
+    $form['import_settings']['fcl_procat_product_import_email_admin'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Reset import variables'),
+      '#description' => t(l('Click here','fcl_import/reset/vars') . ' to reset'),
+    );
+
+    $form['import_settings']['fcl_procat_product_import_email_admin_list'] = array(
+      '#type' => 'textarea',
+      '#title' => t('List of emails'),
+      '#default_value' => variable_get('fcl_procat_product_import_email_admin_list', 'dl.online.web.admin@flightcentre.com.au'),
+      '#description' => t('Put one email per line using either email or "name" &lt;email&gt; format<br><br>'),
+      '#required' => FALSE,
+      '#states' => array(
+        'visible' => array('input[name="fcl_procat_product_import_email_admin"]' => array('value' => '1')),
+      ),
+    );
+
+    /* PRODUCT IMPORT OPTIONS END */
+
+    $form['periodic_import_settings']['separator_import_periodic'] = array(
+      '#type' => 'item',
+      '#title' => t('<h3>Periodic import options</h3>'),
+      '#markup' => t('<hr>'),
+    );
+
+    // Periodic options
+    $form['periodic_import_settings']['fcl_procat_product_import_enable_periodic'] = array(
+      '#type' => 'radios',
+      '#title' => t('Enable periodic import'),
+      '#options' => array('1' => 'Yes', '0' => 'No'),
+      '#default_value' => variable_get('fcl_procat_product_import_enable_periodic', '1'),
+      '#description' => t('Select <strong>NO</strong> option if there is no need in peridic cron runs for Product and List imports'),
+      '#required' => TRUE,
+    );
+
+    $form['periodic_import_settings']['fcl_procat_product_import_time_offset'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Time offset'),
+      '#default_value' => intval(variable_get('fcl_procat_product_import_time_offset', 20*60)),
+      '#size' => 5,
+      '#maxlength' => 5,
+      '#description' => t('Sets the offset inroduced by Procat. Default value: 20 minutes.  This overcomes the delay caused by the time it takes for the product materialise in the Lucene index.'),
+      '#required' => FALSE,
+      '#states' => array(
+        'visible' => array('input[name="fcl_procat_product_import_enable_periodic"]' => array('value' => '1')),
+      ),
+    );
+
+    $options_period = array(
+      -1 => 'Never',
+      0 => 'As often as possible',
+      60 => 'Hourly',
+      24*60 => 'Daily',
+      2*24*60 => 'Every 2 Days',
+      7*24*60 => 'Weekly',
+    );
+
+  
+    $form['periodic_import_settings']['fcl_procat_product_import_period_list'] = array(
+      '#type' => 'select',
+      '#title' => t('Period for list import'),
+      '#options' => $options_period,
+      '#default_value' => variable_get('fcl_procat_product_import_period_list', $options_period[60]),
+      '#description' => t('How often to check periodic imports for lists.<br />'.
+        (($lastrun_lists>0)?('<u>List import last run</u>: ' . $lastrun_lists . ' ('.date('Y-M-d H:i:s', $lastrun_lists).', current time: ' .date('Y-M-d H:i:s', time()).')'):'')),
+      '#states' => array(
+        'visible' => array('input[name="fcl_procat_product_import_enable_periodic"]' => array('value' => '1')),
+      ),
+    );
+
+    $form['periodic_import_settings']['fcl_procat_product_import_period_product'] = array(
+      '#type' => 'select',
+      '#title' => t('Period for product import'),
+      '#options' => $options_period,
+      '#default_value' => variable_get('fcl_procat_product_import_period_product', $options_period[60]),
+      '#description' => 'How often to check periodic imports for products.<br />'.
+        _fcl_procat_product_get_last_import_run_text( $lastrun_product ),
+      '#states' => array(
+        'visible' => array('input[name="fcl_procat_product_import_enable_periodic"]' => array('value' => '1')),
+      ),
+    );
+
+    /* List import */
+
+    // Import lists
+    $form['lists']['separator_import_lists'] = array(
+      '#type' => 'item',
+      '#title' => t('<h3>List import settings</h3>'),
+      '#markup' => t('<hr>'),
+    );
+
+    $form['lists']['fcl_procat_product_import_list_url_prefix'] = array(
+      '#type' => 'textfield',
+      '#title' => t('List feed URL prefix'),
+      '#default_value' => variable_get('fcl_procat_product_import_list_url_prefix', 'https://extract:ZXvC13!@data.fclmedia.com/pct/rest/extract/'),
+      //'#size' => 2,
+      //'#maxlength' => 2,
+      '#description' => t('URL to fetch lists. Use "https://data.fclmedia.com/pct/rest/extract" or "'.$base_url.'/sites/all/modules/custom/fcl_procat_product_import_lists/json/fcl_list_" or "https://extract:ZXvC13!@data.fclmedia.com/pct/rest/extract/"'),
+      '#required' => TRUE,
+    );
+
+   
+    $form['lists']['step1'] = array(
+      '#type' => 'item',
+      '#title' => t('Step 1 - import all lists'),
+      '#markup' => t(l('Import all lists (excluding destinations) &raquo;', 'fcl_import/batch/lists/all', array('absolute' => TRUE, 'html' => TRUE)) ),
+      '#description' => t('Imports all vocabularies excluding destinaitons (due to its size).'),
+    );
+
+    $form['lists']['step2'] = array(
+      '#type' => 'item',
+      '#title' => t('Step 2 - import destinations'),
+      '#markup' => t(l('Import destinations &raquo;', 'fcl_import/batch/lists/place2', array('absolute' => TRUE, 'html' => TRUE))),
+      '#description' => t('Destination lists (with hierarchy).<br />Size: 10Mb<br /><strong>Note</strong> destinations download may take some time due to its size.'),
+    );
+    
+
+    $vocabs = fcl_procat_product_import_get_vocabularies();
+    $voc_options = array('0' => 'Select vocabulary');
+    foreach ($vocabs as $json => $vocab) {
+      $voc_options = array_merge($voc_options, array($json => $vocab['title']));
+
+    }
+
+
+    if (count($voc_options) > 1) {
+      drupal_add_js('jQuery(document).ready(function () { jQuery(".fcl-batch-lists-select").change(function() { jQuery(".fcl-batch-lists-link").attr("href", jQuery(".fcl-batch-lists-link").attr("href").substring(0, jQuery(".fcl-batch-lists-link").attr("href").lastIndexOf("/")+1) + jQuery(".fcl-batch-lists-select").val()); jQuery(".fcl-batch-lists-delete").attr("href", jQuery(".fcl-batch-lists-delete").attr("href").substring(0, jQuery(".fcl-batch-lists-delete").attr("href").lastIndexOf("/")+1) + jQuery(".fcl-batch-lists-select").val()); }); });', 'inline');
+      $form['lists']['adhoc'] = array(
+       '#type' => 'select',
+       '#title' => t('Selective import/delete lists:'),
+       '#options' => $voc_options,
+       '#default_value' => '0',
+       '#attributes' => array('class' => array('fcl-batch-lists-select')),
+       '#description' => t('Set the taxonomy dictionary and '. l('IMPORT selected dictionary', 'fcl_import/batch/lists/0', array('attributes' => array('class' => 'fcl-batch-lists-link'))) . 
+        '<br>OR '. l('EMPTY selected dictionary', 'fcl_import/delete/taxonomy_term/0', array('attributes' => array('class' => 'fcl-batch-lists-delete'))))
+     );
+    }
+
+    /* Product import */  
+    $max_num_of_products = variable_get('fcl_procat_product_import_products_max_number', '500');
+
+    $dateformat = 'd/m/y';
+    $dateformatwhere = 'Y/m/d-H:i:s';
+    
+    $form['product']['separator_product_import'] = array(
+      '#type' => 'item',
+      '#title' => t('<h3>Product import</h3>'),
+      '#markup' => t('<hr>'),
+    );
+
+    // Check if destinations have been imported.
+    $destinations_imported = false;
+    $dest_query = db_select('taxonomy_term_data','td')
+              ->fields('td');
+    $dest_query->join('taxonomy_vocabulary', 'tv', 'tv.vid = td.vid');
+    $dest_count = $dest_query
+      ->condition('tv.machine_name', 'fcl_product_destination','=')
+      ->countQuery()
+      ->execute()
+      ->fetchField();
+    $destinations_imported = $dest_count>0;
+      
+
+    if( count($options) && $destinations_imported  ){
+
+      $import_type = '<strong>Current import method:</strong> ' ;
+      if(variable_get('fcl_procat_product_import_product_option', 'skulist')=='skulist'){
+        $import_type .=  '<ul><li><strong>skuList</strong> [<em>consumer=</em>'. variable_get('fcl_procat_product_import_products_consumer', 'FCLAllProd') . ']</li></ul>';
+      }else{
+        $import_type .=  '<ul><li><strong>Custom query</strong> - <em>first '. 
+          variable_get('fcl_procat_product_import_products_max_number', '500')  . ' ' .
+          variable_get('fcl_procat_product_import_products_extra_query', 'Product') . '</em></li></ul>';
+      }
+
+      $mod_enabled = '<span style="color: #22dd22"><strong>ENABLED</strong></span>';
+      $mod_disabled = '<span style="color: #dd2222"><strong>DISABLED</strong></span>';
+      $form['product']['product_import'] = array(
+        '#type' => 'item',
+        '#title' => t('Product import'),
+        '#markup' => l('Import products &raquo;', 'fcl_import/download/products', array('absolute' => TRUE, 'html' => TRUE)),
+        '#description' => t(
+          'FCL Product module: ' . ((module_exists('fcl_procat_product'))? $mod_enabled: $mod_disabled) .
+          '<br />FCL Product Itinerary module: ' . ((module_exists('fcl_procat_product_itinerary'))?$mod_enabled:$mod_disabled) .
+          '<br /><br />' . $import_type .
+          '<br />' . _fcl_procat_product_get_last_import_run_text( $lastrun_product ) .   
+          '<br /><br />'. t('Temp folder: ' . file_directory_temp())
+        ),
+      );
+    }
+    else {
+      $form['product']['product_import'] = array(
+        '#type' => 'item',
+        '#title' => t('Product import'),
+        '#markup' => t('Disabled'),
+        '#description' => t('Import lists to start importing products'),
+      );
+    }
+    
+    $form['product']['stats'] = array(
+      '#type' => 'fieldset', 
+      '#title' => t('Statistics'), 
+      '#weight' => 4, 
+      '#tree' => TRUE,
+    );
+     
+    // @todo check this is correct
+    $current_time = time();
+
+    // Statistic count
+    // Prepublished
+    $query = new EntityFieldQuery;
+    $fclproduct_count_prepublished = $query
+      ->entityCondition('entity_type', 'fcl_procat_product')
+      ->propertyCondition('commerce_publish_date', $current_time,'>=')
+      ->count()
+      ->execute();
+
+    // Published
+    $query = new EntityFieldQuery;
+    $fclproduct_count_published = $query
+      ->entityCondition('entity_type', 'fcl_procat_product')
+      ->propertyCondition('commerce_publish_date', $current_time,'<')
+      ->propertyCondition('commerce_expiry_date', $current_time,'>=')
+      ->count()
+      ->execute();
+		
+   // expiry
+    $query = new EntityFieldQuery;
+    $fclproduct_count_expired = $query
+      ->entityCondition('entity_type', 'fcl_procat_product')
+      ->propertyCondition('commerce_expiry_date', $current_time,'<')
+      ->count()
+      ->execute();
+
+    
+    $form['product']['stats']['fcls_products'] = array(
+      '#type' => 'item',
+      '#title' => t('FCL Products'),
+      '#markup' => '<u>FCL Product</u> ::  Prepublished: <strong>' . $fclproduct_count_prepublished. '</strong>; Published: <strong>' . $fclproduct_count_published . '</strong>; Expired: <strong>' . $fclproduct_count_expired . '</strong>; Total: <strong>' . ($fclproduct_count_prepublished + $fclproduct_count_published + $fclproduct_count_expired) . '</strong>' . 
+        ((module_exists('fcl_product_itinerary'))?('<br /><u>FCL Product Itinerary</u> :: Published: <strong>' . $fclproductit_count_enabled . '</strong>; Unpublished: <strong>' . $fclproductit_count_disabled . '</strong>; Total: <strong>' . ($fclproductit_count_enabled + $fclproductit_count_disabled) . '</strong>'):''),
+      '#description' => t('FCL products related statistics. ') . l('View products &raquo;', 'admin/content/fcl_procat_products', array('absolute' => TRUE, 'html' => TRUE)),
+    );
+
+
+    $form['product']['stats']['version'] = array(
+      '#type' => 'item',
+      '#title' => t('Version'),
+      '#markup' => '11-Mar-2013 11:08',
+    );
+
+    
+    return system_settings_form($form);
+  }
+
+
+  /**
+   * Former implementation of hook_cron() now run by using drush
+   * Remove _call to make this function part of the cron again
+   */
+  function fcl_procat_product_import_cron_call() {
+    
+    if (variable_get('fcl_procat_product_import_enable_periodic', '1') > 0) {
+
+    }
+  }
+
+  /**
+   * Implements hook_cron_queue_info().
+   */
+  function fcl_procat_product_import_cron_queue_info() {
+    $queues = array();
+    $queues['fcl_product_import_cron_lists'] = array(
+      'worker callback' => 'fcl_procat_product_import_cron_queue_item_process',
+      'time' => 3000, // This is the max run time per cron run in seconds. 
+    );
+    $queues['fcl_product_import_cron_products'] = array(
+      'worker callback' => 'fcl_procat_product_import_cron_queue_item_process',
+      'time' => 3000, 
+    );
+    return $queues;
+  }
+
+  /**
+  * Scheduler callback for FCL list importing.
+  * Function replicates functionality of fcl_procat_product_import_batch_importer.
+  *
+  * @TODO: merge with fcl_procat_product_import_batch_importer to optimize the process
+  */
+  function fcl_procat_product_import_cron_queue_item_process($item) {
+      
+    // @todo implement this
+   
+  }
+
+
+  /**
+   *  Get import URL
+   *
+   *  @param Boolean - get all the products (false) or products since the last import
+   *
+   *  @return Array - list of URLs for import
+   */
+  function fcl_procat_product_import_get_product_import_url() {
+    
+    $maxNumOfProducts = variable_get('fcl_procat_product_import_products_max_number', '500');
+    $dateFormat = 'Y/m/d';
+    $datetimeFormat = $dateFormat . '-H:i:s';
+  
+    // @todo we need to make use of dateoffset.
+    $dateOffset = intval(variable_get('fcl_procat_product_import_time_offset', 20*60));
+    
+    $extraQuery = str_replace(' ','%20', variable_get('fcl_procat_product_import_products_extra_query', 'Product'));
+    $extraQuery = ($extraQuery == 'Product')?'Product':'Product%20where%20'.$extraQuery;
+
+    
+    $sourceUrl = array();
+
+    $sourceUrl[] = variable_get('fcl_procat_product_import_product_url_prefix', 'http://data.fclmedia.com/nzweb-longtimeout/query') . '?query=first%20'.$maxNumOfProducts.'%20' .$extraQuery.'&engine=json&consumer='.variable_get('fcl_procat_product_import_products_consumer', 'CorporateTravellerAUAllProd').'&useCache=false';
+
+    return $sourceUrl;
+  }
+
+
+  /**
+   *  Process the list of FCL lists to import
+   *
+   *  @param $list
+   *     String - the destination to import
+   * 
+   * @return 
+   *     Array - name of lists to import
+   */
+  function fcl_procat_product_import_get_lists_to_import($list) { 
+    $vocabs = fcl_procat_product_import_get_vocabularies();
+
+    $lists = array( $list );
+    if($list=='all'){
+      // Get all except place1 and place2
+      $lists = array_keys($vocabs);
+      unset($lists[array_search('place1', $lists)]);
+      unset($lists[array_search('place2', $lists)]);
+    }
+    return $lists;
+  }
+
+
+  /**
+   *  Process the list of FCL lists to import
+   *
+   *  @param $list
+   *     String - list to wrap in URL
+   *  @param $enableperiodic
+   *     Boolean - return string for periodic import or normal
+   * 
+   * @return 
+   *     String - URL to get list
+   */
+  function fcl_procat_product_import_wrap_list_uri($list, $enableperiodic=false) { 
+    $dateformatforlist = 'YmdHis';
+    $dateoffset = intval(variable_get('fcl_procat_product_import_time_offset', 20*60));
+    //$enableperiodic = variable_get('fcl_procat_product_import_enable_periodic', '1');
+    $datestart = variable_get('fcl_procat_product_import_period_list_lastimport', time()) - $dateoffset;
+    $periodic = ($enableperiodic)?('/modified/'.date($dateformatforlist, $datestart)):'';
+
+    $jsonstart = variable_get('fcl_procat_product_import_list_url_prefix', 'https://extract:ZXvC13!@data.fclmedia.com/pct/rest/extract/');
+    //$jsonend = variable_get('fcl_procat_product_import_list_url_suffix', '.json');
+    return $jsonstart.$list.$periodic;
+  }
+
+  /**
+   *  batch import of places list 
+   *
+   *  @param $list
+   *     String - the destination to import
+   *  @param $drushCall
+   *     Boolean - tru to execute via drush
+   */
+  function fcl_procat_product_import_batch_lists($list, $drushCall = false) { 
+
+    //variable_set('fcl_procat_product_import_period_list_lastimport', time());
+    variable_set('fcl_procat_product_import_period_list_lastimport_count', 0);
+    variable_set('fcl_procat_product_import_period_list_lastimport_started', time());
+
+    $vocabs = fcl_procat_product_import_get_vocabularies();
+    $operations = array();
+    $lists = fcl_procat_product_import_get_lists_to_import($list);
+    
+    // Get the source URL and filename
+    $fileBaseName = file_directory_temp() . '/FCLFeedListImporter_batch_';
+
+    foreach($lists as $list){
+      if (isset($vocabs[$list]) && is_array($vocabs[$list])) {
+
+        $source_url = fcl_procat_product_import_wrap_list_uri($list);
+
+        // Download the file and get the batch operations to be performed.
+        $operations = array_merge($operations,  fcl_procat_product_import_get_batch('FCLFeedListImporter', $source_url, 600, $fileBaseName . $list, $vocabs[$list]['vocabulary'] ));
+      } 
+    }
+    
+    // Disabling modules moved outside the import
+    //fcl_procat_product_import_wrap_module_disable($operations);
+    fcl_procat_product_import_switch_module();
+
+
+    if(count($operations) > 0) { 
+
+      // If this is destinations we want to add destination structure process as last batch 
+      if($list==='place2'){
+        $operations[] = array('fcl_procat_product_import_structure_destinations', array());
+      }
+
+      // Create the batch
+      $batch = array(
+        'title' => t('Getting FCL list(s)'),
+        'operations' => $operations,
+        'progress_message' => t('Current: @current | Remaining:
+          @remaining | Total: @total  (@percentage % complete)'),
+        'init_message' => t('FCL List import is starting.'),
+        'finished' => 'fcl_procat_product_import_import_lists_complete',
+      );
+      batch_set($batch);
+      
+      if ($drushCall) {
+        drush_backend_batch_process();
+      }
+      else 
+      {
+        batch_process('admin/fcl/procat_product_import');
+      }
+    }else {
+      drupal_set_message("No valid lists were specified", 'warning');
+      drupal_goto('admin/fcl/procat_product_import');
+    }
+  }
+
+  /**  
+   *   FCL list import batch finished callback
+   *   
+   */
+  function fcl_procat_product_import_import_lists_complete($success, $results, $operations){
+    // Resetting variables if import was success
+    fcl_procat_product_import_switch_module(false); // reenable modules
+    if ($success) {
+      //drupal_set_message("FCL '.$list.' list was downloaded");
+
+      if (variable_get('fcl_procat_product_import_period_list_lastimport_count', 0) > 0) {
+        $import_started = variable_get('fcl_procat_product_import_period_list_lastimport_started', 0);
+        variable_set('fcl_procat_product_import_period_list_lastimport', time() - (time() - $import_started));
+        variable_set('fcl_procat_product_import_period_list_lastimport_count', 0);
+      }
+    }
+  }
+  
+  /**
+   * A generic importer used by the batch importer folder
+   * 
+   * @param $feedType
+   *    String - the type of the FCLFeedImporter class implementation.
+   * @param $source
+   *     Feed source url
+   * @param $importer_type_list_dict
+   *     Taxonomy dictionary to update
+   * @param $cache_folder
+   *     Optional cache-folder name to save a downloaded resource.
+   *      
+   */
+  function fcl_procat_product_import_batch_importer($feedType, $source, $importer_type_list_dict = "", $cache_folder=NULL ){
+        
+    if(!isset($_SESSION['fcl_import'])) {
+      $_SESSION['fcl_import'] = array('total_read' => 0, 'total_process' => 0, 
+                                      'product_new' => 0, 'product_update' => 0);
+    }
+
+    $b = new FclBenchmarker();
+    $b->start();
+
+    $feedImporter = fcl_procat_product_import_get_feed_importer($feedType, $source, $importer_type_list_dict);
+   
+    // Import this feed.
+    if ($feedImporter->process( $cache_folder )) {
+      $_SESSION['fcl_import']['total_read'] += $b->setpoint('Loaded file '. $source);
+
+      if ($feedImporter->import($b) !== false) {
+        $importCount = $feedImporter->getCount();
+        $_SESSION['fcl_import']['total_process'] += $b->setpoint('Imported '. $importCount . format_plural($importCount, ' entity', ' entities'));
+
+        watchdog($feedType . " Stat", "Batch results - ". $b->getResultsTable() );
+      }
+      else {
+        drupal_set_message("Something went wrong while processing the batch. One of the reasons might be lack of proxy details.", 'error');
+        // @ TODO: watchdog
+      }
+      //fcl_procat_product_import_switch_module(false);
+    }
+    else {
+      drupal_set_message("Batch import failed. See ".l("log", "admin/reports/dblog")." for more details", 'error');
+    }
+  }
+
+
+  /**
+   *
+   *  Returns the cachefolder, creating it if it desn't exist
+   * 
+   *  @param $brand
+   *      String - the brand to create the cache folder for.
+   */
+  function fcl_procat_product_import_get_cache_folder( $brand){
+      
+      $defaultpath = $_SERVER['DOCUMENT_ROOT'] . '/sites/default/files/product-import-cache' ;
+      $cacheFolder =  variable_get('fcl_procat_product_import_cache_location',  $defaultpath) .'/'. $brand;
+      if( !is_dir($cacheFolder) ){
+        drupal_mkdir($cacheFolder, NULL, TRUE );
+      }
+
+      return $cacheFolder;
+
+   }
+
+
+  /**
+   * Downloads the destination list feed. 
+   *
+   * @todo - Pull this apart so it is generic (remove direct URL, 
+   *         and destination dummy class etc.)
+   *
+   * @param $importer_type
+   *    String - the type of the FCLFeedImporter class implementation.
+   * @param $source_url
+   *     Feed source url
+   * @param $importer_type_list_dict
+   *     Taxonomy ictionary to be updated
+   * 
+   * @return 
+   * An objetc to represent importer.
+   *
+   */
+  function fcl_procat_product_import_get_feed_importer($importer_type, $source_url, $importer_type_list_dict = "") {
+
+    $feed_importer = null;
+
+    // Create the Feeds importer.
+    if (strlen($importer_type_list_dict) && ($importer_type == "FCLFeedListImporter")) {
+      $feed_importer = new $importer_type($source_url, $importer_type_list_dict);
+    }
+    else {
+      $feed_importer = new $importer_type($source_url);
+    }
+
+    return $feed_importer;
+  }
+
+
+  /**
+   * Downloads a list of products via the skuList service.
+   * Leveraging shared filesuystem for caching responses from Sitecat
+   *
+   *
+   * @param $importer_type
+   *    String - the type of the FCLFeedImporter class implementation.
+   * @param $batchsize
+   *    String - The number of products per batch.
+   * @param $maxAge
+   *    Int - the maximum age (in seconds) we can be satisfied with just cached results.
+   *
+   * @return 
+   *    Array of resources Each is an array with { "source" => '', "cache" => '' }
+   * @todo Make logging more optional
+   */
+ function fcl_procat_product_import_get_sku_queries($importer_type, $batchsize, $maxAge ) {
+
+    $b = new FclBenchmarker();
+    $b->start();
+
+    $resoures = array();
+
+    // Get the current time
+    $currentTime = time();
+
+    // This needs to know consumer.
+    $consumer = variable_get('fcl_procat_product_import_products_consumer', 'FCWebAllProd');
+    $brands = fcl_procat_product_import_get_consumer_brands( $consumer );
+
+    // Get last import datetime.  @todo set cacheFolder false if first import.
+    $last_import = variable_get('fcl_procat_product_import_period_product_lastimport', array());  
+
+    // Break consumer down to consituent - this allows us better resuse of downloaded Sitecat content.
+    foreach($brands as $brand){
+
+      // false if the update can't be satisfied by cache
+      $satisfied_by_cache = false;
+
+      // This will be set if we cant satisfy from cache alone.
+      $modified_since = isset($last_import[$brand]) ? $last_import[$brand] : 0;
+     
+      // Initial import is a special case - we don't want to cache.
+      $initial_import = ($modified_since==0);
+
+      $b->setPoint('==== Queueing import sources for brand: '.$brand.' ====');
+
+      // Get the cache folder path.
+      $cache_folder = fcl_procat_product_import_get_cache_folder($brand);
+     
+      // Get the max staleness (ie how old a cached version can be before it is too old)
+      // @todo - find way to configure this per brand?
+      $max_staleness = $currentTime - $maxAge;
+
+      // Get the brands caching folders
+      $timestamps = scandir($cache_folder);
+
+      // Delete cached data older than 30 days.
+      $one_month_ago = $currentTime - 60*60*24*30;
+      
+            
+      // Loop over the cached folders
+      foreach($timestamps as $timestamp){
+        
+        $last_imported = 0;
+
+        // Get the name of the folder.
+        $timestamp_folder = $cache_folder .'/'. $timestamp;
+
+        if( preg_match ( '#\d{10}#', $timestamp) ){
+          $time = (int) $timestamp;
+          
+          if( $time>$modified_since ){
+            
+            if( !$initial_import ){
+              
+              // Get file listing  and sort it.
+              // equates to oldest-first in this application.
+              $files = scandir( $timestamp_folder );
+              asort($files);
+              foreach($files as $file){
+                if($file!='.' && $file!='..'){
+                  $resoures[] = array( 
+                                    "source" =>  $timestamp_folder . '/' .$file,
+                                    "cache" => NULL,
+                                );
+                }
+                $b->setPoint( 'Added '.(count($files)-2).' cached resources from '. $timestamp_folder );
+              }
+
+              // If this is fresh enough we don't need to make more queries to Sitecat.
+              if( $time > $max_staleness ){
+                $satisfied_by_cache = true;
+              }
+
+              // Update the last_import time (this works becasue of SCANDIR_SORT_ASCENDING)
+              $last_import[$brand] = $time;
+            }
+
+            // Update modified_since
+            $modified_since = $time;
+            
+          }
+
+          // CLEANUP - If this cached data is greater than one month old, delete it
+          if( $time < $one_month_ago){
+              $del_files = array_diff(scandir($timestamp_folder), array('.', '..'));
+              // Remove all the file in the direcotry
+              foreach( $del_files as $del_file){
+                $del_path = $timestamp_folder . '/' . $del_file;
+                if(is_file($del_path)){
+                  unlink($del_path);
+                }
+              }
+              // Attempt to remove folder.
+              rmdir($timestamp_folder);
+          }
+        }
+      }
+ 
+      // See if we need to make more queries:
+      if( !$satisfied_by_cache ){
+        $sku_service_url = variable_get('fcl_procat_product_import_product_skulist', 'https://list:ZXvC13!@data.fclmedia.com/pct/rest/list/product/skuList');
+        $sku_service_url .= '?brand=' . $brand;
+        
+        // Initial import is special case.
+        if($initial_import){
+          $cache_folder = null;
+
+          // Set the expires after field (We are only interested in published plus prebulished content on initial import)
+          $expires_after = variable_get('fcl_procat_product_import_product_expires_after',  _procat_product_import_get_sitecat_time( $currentTime ) );
+          $sku_service_url .= '&expiresAfter=' . $expires_after;
+
+          // Keep in sync with other brands if a cache for this brand exists
+          if($modified_since!=0){
+            $sku_service_url .= '&endDate=' . _procat_product_import_get_sitecat_time( $modified_since );
+            $last_imported = $modified_since;
+          }else{
+            $last_imported = $currentTime;
+          }
+
+        }else{
+          
+          // Add startDate (poorly named parameter that refers to modifiedSince)
+          if($modified_since){
+            $sku_service_url .= '&startDate=' . _procat_product_import_get_sitecat_time($modified_since);
+            $last_imported = $currentTime;
+          }
+        } 
+      
+        // Get sitecat query base
+        $query_url = variable_get('fcl_procat_product_import_product_url_prefix', 'http://data.fclmedia.com/nzweb-longtimeout/query');
+
+        $feed_importer = new $importer_type('');
+        
+        $newSkus = $feed_importer->getSkuListQueries( $sku_service_url, $query_url, $batchsize, $cache_folder  );
+        if ($newSkus === false) {
+          $b->setPoint('Failed to download source for '.$brand.': ' . $sku_service_url);
+        } 
+		else if(count($newSkus)===0) {
+          $b->setPoint('No new products for '.$brand.': ' . $sku_service_url);
+        }
+		else {
+          $b->setPoint('Downloaded skulist for '.$brand.': ' . $sku_service_url);
+          $resoures = array_merge( $resoures, $newSkus);
+          $last_import[$brand] = $last_imported;
+            
+        }     
+
+      }
+
+      // Update the last product import date for successsfully downloaded brands  
+      variable_set('fcl_procat_product_import_period_product_lastimport', $last_import );
+
+      watchdog("FCL Product Import Stat", "SkuList download - ". $b->getResultsTable() );
+
+    }
+
+    // @todo if there are no new products from the sku service
+    // update the timestamp on the lastest timestamp folder?
+    // Without current access to shared database - this seems like best 
+    // way currently (and works nicely with above logic)
+    // rename( string $oldname , string $newname );
+
+    return $resoures;
+ }
+
+ /**
+  *  Returns the sitecat time given a timestamp.
+  *  @return String (date in yyyymmddhhiiss format)
+  */
+ function _procat_product_import_get_sitecat_time( $timestamp ){
+
+    // Sitecat timezone is Australia/Brisbane
+    $timezone = timezone_open('Australia/Brisbane');;
+    $date = new DateTime('@'.$timestamp);
+    $date->setTimezone($timezone);
+
+    return $date->format('YmdHis');
+ }
+
+ /**
+   * Downloads a full product feed and splits it into a json file
+   *
+   * @param $importerType
+   *    String - the type of the FCLFeedImporter class implementation.
+   * @param $sourceUrl
+   *     The source Url
+   * @param $batchSize
+   *     The batch size (eg 200)
+   * @param $fileBaseName
+   *     The file basename
+   * @param $importerTypeListDict
+   *     Taxonomy dictionary to update
+   *
+   * @return 
+   * An array of source files.
+   *
+   */
+  function fcl_procat_product_import_get_batch($importerType, $sourceUrl, $batchSize, $fileBaseName, $importerTypeListDict = ""){
+
+    $dataLimit = $batchSize;
+    $operations = array();
+
+    // maxCacheAge in seconds 
+    $maxAge = (int) variable_get('fcl_procat_product_import_cache_max_age', 60*60);
+
+    // Get current timestamp and cache folder for caching purposes
+    $cachetimestamp = time();
+
+    // Download source and distribute in files if importing one big batch
+    if($importerType == 'FCLFeedProductImporter' && variable_get('fcl_procat_product_import_product_option', 'query') == 'skulist'){
+      // Get Sku list and queue inidividual queries.
+      $resources = fcl_procat_product_import_get_sku_queries( $importerType, $batchSize, $maxAge );
+
+    }else{
+      // Download feed in one go and process feed into segments, and get file array
+      $feedImporter = fcl_procat_product_import_get_feed_importer($importerType, $sourceUrl, $importerTypeListDict);
+      $resources = $feedImporter->processIntoSegments( $dataLimit, $fileBaseName );
+      drupal_set_message("Successfully downloaded source $sourceUrl.");
+    }
+
+    // Segment the json feed in manageable chunks to import
+    for( $i=0; $i<count($resources); $i++){
+
+      // @todo - Make caching optional - dependant on initial import etc.
+      $cache_folder = $resources[$i]['cache'];
+      if( isset($cache_folder)){
+        $cache_folder = $cache_folder .'/'.$cachetimestamp;
+        if( !is_dir($cache_folder) ){
+          mkdir($cache_folder);
+        }
+      }
+
+      $operations[] = array('fcl_procat_product_import_batch_importer', array($importerType, $resources[$i]['source'], $importerTypeListDict, $cache_folder  ) );
+    }
+
+    // Return the array of operations.
+    return $operations;
+  }
+
+
+  /**
+    *  This returns an array of Brand codes matching a given consumer.
+    *  
+    * @param $consumer
+    *   the name of the consumer.
+    * @return
+    *   Array of brands    
+    */
+   function fcl_procat_product_import_get_consumer_brands($consumer){
+
+
+    // Get all taxonomy terms associated with this module
+    $result = db_query('SELECT t.description FROM taxonomy_term_data AS t '.
+                       'JOIN taxonomy_vocabulary AS tv ON t.vid = tv.vid ' .
+                       'WHERE tv.machine_name=\'fcl_product_consumer\' AND t.name=\''. $consumer .'\'');
+    $record = $result->fetchObject();
+    $brands = explode(',',$record->description);
+    return $brands;
+   }
+
+
+  /**  
+   *   Product import callback on completion
+   *   
+   */
+  function fcl_procat_product_import_import_products_batch_complete($success, $results, $operations){
+
+	  // The 'success' parameter means no fatal PHP errors were detected. All
+	  // other error management should be handled using 'results'.
+	  if ($success) {
+		  $message = format_plural(count($results), 'One feed processed.', '@count feeds processed.');
+		  //$message = format_plural(count($results['completed']), 'One centre processed.', '@count centres processed.').'<br/>'.format_plural(count($results['failed']), 'One centre failed.', '@count centres failed.');
+	  }
+	  else {
+		  $message = t('Finished with an error.');
+	  }
+	  drupal_set_message($message);
+	  // Providing data for the redirected page is done through $_SESSION.
+	  //$items = array();
+	  //foreach ($results as $result) {
+	  // $items[] = 'scraped '.$result;
+	  //}
+	  //$_SESSION['doco_batch_results'] = $items;
+
+	  $_SESSION['fcl_procat_product_import_import_products_batch_results'] = $results;
+	  
+
+	  drupal_goto('admin/fcl/procat_product_import');
+  }
+
+  /**  
+   *   Full product list import
+   *   
+   * @param $enableperiodic
+   *     Switch on periodic imports (cron integration)
+   * @param $drushCall
+   *     True when called by drush
+   *
+   */
+  function fcl_procat_product_import_import_products($drushCall = false) {
+
+    global $base_url;
+    
+    unset($_SESSION['fcl_import']);
+
+    $sourceUrls = fcl_procat_product_import_get_product_import_url();
+    $fileBaseName = file_directory_temp() . '/FCLFeedProductImporter_batch';
+
+
+    // Download the file and get the batch operations to be performed.
+    $noOfProductsPerBatch = variable_get('fcl_procat_product_import_products_no_per_batch', '20');
+    $operations = array();
+    foreach ($sourceUrls as $sourceUrl) {
+      $operations = array_merge($operations, 
+          fcl_procat_product_import_get_batch('FCLFeedProductImporter', $sourceUrl, $noOfProductsPerBatch, $fileBaseName));
+    }
+
+
+    // Email import kickoff message @todo move this.
+    if (variable_get('fcl_procat_product_import_email_admin', '0') == 1) {
+      $base_url_email = explode('//', $base_url);
+      $from = '"Drupal import" <do_not_reply@fcldrupalproductimport.test>';
+      $dateFormat = 'Y-M-d H:i:m';
+      $subject = "FCL Product Import: started: " . date($dateFormat);
+      $message = "Product import started at ".date($dateFormat)." on ".$base_url."<br><br>Email will be sent upon success.<br><br>Sitecat calls to run: <ul>" . implode('<li>', $sourceUrls) . '</ul>' ;
+      
+      // Get contacts
+      $emails = explode("\n", variable_get('fcl_procat_product_import_email_admin_list', 'dl.online.web.admin@flightcentre.com.au'));
+      foreach ($emails as $email) {
+        fcl_procat_product_import_drupal_mail($subject, $message, $email, $from);
+      }
+    }
+
+    // If there are no operations, this indicates no products need to be downloaded.
+    if(count($operations)==0) {
+      if ($drushCall) {
+        drush_log('Imports are all up to date.', 'notice');
+      }
+      else {
+        drupal_set_message('Imports are all up to date.');
+      }
+    }
+
+    // Create the batch file
+    $batch = array(
+      'title' => t('Importing products'),
+      'operations' => $operations,
+      'progress_message' => t('Current action: @current | Remaining:
+        @remaining | Total: @total  (@percentage % complete)'),
+      'init_message' => t('FCL Product import is starting.'),
+      'finished' => 'fcl_procat_product_import_import_products_complete',
+    );
+
+    batch_set($batch);
+
+    if ($drushCall) {
+      drush_backend_batch_process();
+    }
+    else {
+      batch_process('admin/fcl/procat_product_import');
+    }
+    
+  }
+
+  /**  
+   *   Product list import batch finished callback
+   *   
+   */
+  function fcl_procat_product_import_import_products_complete($success, $results, $operations){
+    global $base_url;
+
+    $data = "";
+    
+
+    $total_read = empty($_SESSION['fcl_import']['total_read'])?0:$_SESSION['fcl_import']['total_read'];
+    $total_process = empty($_SESSION['fcl_import']['total_process'])?0:$_SESSION['fcl_import']['total_process'];
+    $products_new = empty($_SESSION['fcl_import']['product_new'])?0:$_SESSION['fcl_import']['product_new'];
+    $products_update = empty($_SESSION['fcl_import']['product_update'])?0:$_SESSION['fcl_import']['product_update'];
+    $data = "<ul><li><strong>Total JSON read time:</strong> ".$total_read."</li>" . 
+            "<li><strong>Total Drupal processing and save time:</strong> ".$total_process."</li>" .
+            "<li><strong>New products:</strong> ".$products_new."</li>" .
+            "<li><strong>Existing products:</strong> ".$products_update."</li>" .
+            "<ul>";
+    
+    drupal_set_message("FCL Product import complete" . $data);
+
+    // Watchdog report
+    watchdog('FCL Product Import Stat', '<u>Product batch import</u> Details:<ul>'.
+        '<li><strong>Products per batch</strong>: %fcl_import_products_per_batch </li>' .
+        "<li><strong>Total JSON read time:</strong> %fcl_import_total_read </li>" . 
+        "<li><strong>Total Drupal processing and save time:</strong> %fcl_import_total_process </li>" .
+        '<li><strong>Total number of products</strong>: %fcl_import_total </li>' .
+        "<li><strong>New products:</strong> %fcl_import_products_new </li>" .
+        "<li><strong>Existing products:</strong> %fcl_import_products_update </li>" .
+        '</ul>',
+      array(
+          '%fcl_import_products_per_batch' => variable_get('fcl_procat_product_import_products_no_per_batch', '20'), 
+          '%fcl_import_total_read' => $total_read, 
+          '%fcl_import_total_process' => $total_process, 
+          '%fcl_import_total' => $products_new + $products_update, 
+          '%fcl_import_products_new' => $products_new, 
+          '%fcl_import_products_update' => $products_update, 
+        ),
+      WATCHDOG_INFO);
+
+    // email administrators
+    if (variable_get('fcl_procat_product_import_email_admin', '0') == 1) {
+      $base_url_email = explode('//', $base_url);
+      $from = '"Drupal import" <do_not_reply@fcldrupalproductimport.test>';
+      $dateFormat = 'Y-M-d H:i:m';
+      $subject = "FCL Product Import: completed: " . date($dateFormat);
+      $message = "Product import completed at ".date($dateFormat)." on ".$base_url."<br><br>Stats: ".$data ;
+      $emails = explode("\n", variable_get('fcl_procat_product_import_email_admin_list', 'dl.online.web.admin@flightcentre.com.au'));
+      foreach ($emails as $email) {
+        fcl_procat_product_import_drupal_mail($subject, $message, $email, $from);
+      }
+    }
+
+  }
+
+  /**
+   * Gets an array of sources for the lists import. 
+   *
+   * @return 
+   * The list of FCL taxonomy vacabularies with their machine names based on import list JSON key.
+   *
+   */
+  function fcl_procat_product_import_get_vocabularies() {
+    $vocabs = array(
+      'brand' => array('title' => 'Product brand', 'vocabulary' => 'fcl_product_brand'),
+      'campaignmedium' => array('title' => 'Product campaign',  'vocabulary' => 'fcl_product_campaign_medium'),
+      'productcategory' => array('title' => 'Product category',  'vocabulary' => 'fcl_product_category'),
+      'consumer' => array('title' => 'Product consumer',  'vocabulary' => 'fcl_product_consumer'),
+      'place1' => array('title' => 'Product destination',  'vocabulary' => 'fcl_product_destination'),
+      'place2' => array('title' => 'Product destination (structured)',  'vocabulary' => 'fcl_product_destination'),
+      'duration' => array('title' => 'Product duration',  'vocabulary' => 'fcl_product_duration'),
+      'holiday' => array('title' => 'Product holiday experience',  'vocabulary' => 'fcl_product_holiday_experience'),
+      'productselection' => array('title' => 'Product selection',  'vocabulary' => 'fcl_product_selection'),
+      'rating' => array('title' => 'Product star rating',  'vocabulary' => 'fcl_product_star_rating'),
+      'supplier' => array('title' => 'Product supplier',  'vocabulary' => 'fcl_product_supplier'),
+      'traveller' => array('title' => 'Product travellers',  'vocabulary' => 'fcl_product_travellers'),
+    );
+    return $vocabs;
+  }
+
+  
+ /**
+   * Downloads a product image
+   *
+   * @param $valSupplied
+   * 	The image file value supplied
+   */
+  function fcl_procat_product_import_process_image_file($valSupplied) {
+		
+    $file = null;
+    $valuesReturned = array();
+
+    if (substr($valSupplied,0,1) == '/') {
+      $valSupplied = variable_get('fcl_procat_product_import_custom_image_prefix', 'http://www.fclmedia.com') . $valSupplied;
+    }
+
+    // Don't process if URL finishes with slash
+    if (substr($valSupplied,strlen($valSupplied)-1, 1) == '/') {
+      return $valuesReturned;
+    }
+
+    // Validate image
+    $isValidImgFile = true;
+    $file_mime_types = array(
+        'gif' => 'image/gif',
+        'png' => 'image/png',
+        'jpg' => 'image/jpeg', 
+        'jpeg' => 'image/jpeg',
+        'ashx' => 'image/png',
+    );
+    $fileextparts = explode('.', $valSupplied);
+    $fileext = strtolower( $fileextparts[count($fileextparts)-1] );
+    $isValidImgFile = in_array($fileext, array_keys( $file_mime_types ) );
+
+    
+    if($isValidImgFile) {
+
+      // Get file mime_type
+      $file_mime_type = $file_mime_types[$fileext];
+
+      // Check the folder exists (creating it recursively if needed.)
+      $filebaseuri = variable_get('fcl_procat_product_image_file_store', 'global://product-images/');
+      $real_base = drupal_realpath($filebaseuri );
+
+      if(!is_dir($real_base)){
+        if (drupal_mkdir($real_base, null, TRUE) === false) {
+          drupal_set_message('FCL Product Import Error: ' . 
+            'Unable to create directory <strong>'.$real_base.'</strong>. Check your permissions.', 'error');
+          watchdog('FCL Product Import Error',
+            '<strong>Unable to create directory %dir for image import</strong>',
+            array('%dir' => $real_base,),
+            WATCHDOG_DEBUG);
+        }
+        drupal_chmod($real_base, 0777);
+      }
+
+      if(is_dir($real_base) !== false) {
+        $fileparts = explode('/', $valSupplied);
+        $filename = $fileparts[count($fileparts)-1];
+
+        $file_uri = $filebaseuri . $filename;
+        $realfilepath = drupal_realpath( $file_uri );
+
+        // @todo conditions array is being deprecated.
+        $files = file_load_multiple(array(), array('uri' => $file_uri ));
+        $file = reset($files); // If empty, $file will be false, otherwise will contain the required file
+
+        // If file was removed, redownload it
+        if (($file) && !file_exists($realfilepath)) {
+          file_delete($file);
+          $file = false;
+        }
+        
+        // Setting up CURL & image download
+        if (!$file) {
+
+          // Check if the file exists:
+          if (!file_exists($realfilepath)) {
+   
+            // Download the file
+            $fh = fopen($realfilepath,'w+');
+
+            $curl = curl_init($valSupplied);
+            //curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($curl, CURLOPT_FILE, $fh);
+            curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, false);
+            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($curl, CURLOPT_CONNECTTIMEOUT , 5);
+            $pserver = variable_get('proxy_server', '');
+            $pport = variable_get('proxy_port', '');
+            $puname = variable_get('proxy_username', '');
+            $ppaswd = variable_get('proxy_password', '');
+            if (strlen($pserver)) {
+              curl_setopt($curl, CURLOPT_PROXY, $pserver . (strlen($pport)?(':'.$pport):''));
+            }
+            if (strlen($puname)) {
+              curl_setopt($curl, CURLOPT_PROXYUSERPWD, $puname . (strlen($ppaswd)?(':'.$ppaswd):''));
+            }
+            curl_exec($curl);
+            
+            // Get the mime type
+            $mime_type = curl_getinfo($curl, CURLINFO_CONTENT_TYPE);
+            if(isset($mime_type)){
+              $file_mime_type = $mime_type;
+
+              // @todo rename dirty filenames (eg ashx)
+            }
+
+            curl_close($curl);
+            fclose($fh);
+            chmod($realfilepath, 0777);
+
+          }
+
+          if (file_exists($realfilepath) && filesize($realfilepath)) {
+            // Save file in Drupal
+            $file = new stdClass();
+            $file->uri = $file_uri;
+            $file->uid = 1;
+            $file->fid = 0;
+            $file->status = 1;
+            $file->filemime = $file_mime_type;
+            $file->filename = $filename;
+
+            file_save($file);
+          }
+          else {
+            watchdog('FCL Product Import Error',
+              '<strong>Unable to save file from %url</strong>. If you are on the local FC network, your setup file might be missing proxy settings.',
+              array('%url' => $realfilepath,),
+              WATCHDOG_DEBUG);
+          }
+        }
+
+        // Check file exists
+        if (!empty($file->fid) && file_exists($realfilepath) && filesize($realfilepath)) {
+          $image = image_load($file->uri);
+          if ($image) {
+            $info = image_get_info($file->uri);
+            $valuesReturned = array(
+              'fid' => $file->fid,
+              'uid' => $file->uid,
+              'alt' => null,
+              'title' => null,
+              'width' => $info['width'],
+              'height' => $info['height'],
+              'filename' => $filename,
+              'uri' => $file->uri,
+              'filemime' => $file->filemime,
+              'filesize' => $info['file_size'],
+              'status' => $file->status,
+              'timestamp' => $file->timestamp,
+              'type' => 'image',
+            );
+            
+            image_save($image);
+          }
+        }
+        else {
+          drupal_set_message('FCL Product Import Error: ' . 
+            'Unable to load file <strong>'.$realfilepath.'</strong>. If you are on the local FC network, your setup file might be missing proxy settings.', 'error');
+          watchdog('FCL Product Import Error',
+            '<strong>Unable to save file from %url</strong>. If you are on the local FC network, your setup file might be missing proxy settings.',
+            array('%url' => $realfilepath,),
+            WATCHDOG_DEBUG);
+        }
+      }
+
+    }
+    else {
+      // If not empty image
+      if (strlen($valSupplied)) {
+        // Watchdog invilid image file
+        watchdog('FCL Product Import Debug',
+          '<strong>Invalid image file [%value_supplied] for field [%mapping_target]</strong>',
+          array('%value_supplied' => $valSupplied, '%mapping_target' => $mapping_target),
+          WATCHDOG_DEBUG);
+      }
+    }
+
+    return $valuesReturned;
+  }
+
+  
+  /**
+  * Simple wrapper function for drupal_mail() to avoid extraneous code.
+  *  
+  * @param $subject
+  *   String: Email subject
+  * @param $message
+  *   String: Email message
+  * @param $to
+  *   String: Email to
+  * @param $from
+  *   String: Email from (optional)
+  *
+  * @return
+  *   Boolean: success of failure
+  */
+  function fcl_procat_product_import_drupal_mail($subject, $message, $to = 'dl.online.web.admin@flightcentre.com.au', $from = 'default_from') {
+    $my_module = 'fcl_procat_product_import_lists';
+    $my_mail_token = microtime();
+    if ($from == 'default_from') {
+      // Change this to your own default 'from' email address.
+      $from = variable_get('system_mail', 'My Email Address <example@example.com>');
+    }
+    $message = array(
+      'id' => $my_module . '_' . $my_mail_token,
+      'to' => $to,
+      'subject' => $subject,
+      'body' => array($message),
+      'headers' => array(
+        'From' => $from, 
+        'Sender' => $from, 
+        'Return-Path' => $from,
+      ),
+    );
+    $system = drupal_mail_system($my_module, $my_mail_token);
+    $message = $system->format($message);
+    if ($system->mail($message)) {
+      return TRUE;
+    }
+    else {
+      return FALSE;
+    }
+  }
+
+
+  /**
+   *  Batch deletion of products or terms 
+   *
+   *  @param $type
+   *    String - node or taxonomy_term
+   *  @param $machineName
+   *    String - machine name of node or taxonomy_term
+   *  @param $drushCall
+   *     Boolean - try to execute via drush
+   */
+  function fcl_procat_product_import_delete_entities($type, $machineName, $drushCall = false) {
+         
+    $operations = array();
+    if ($type == 'node') { // delete the node
+      $query = new EntityFieldQuery;
+      $result = $query
+        ->entityCondition('entity_type', 'node')
+        ->propertyCondition('type', $machineName)
+        ->execute();
+        
+      // Loading existing product
+      if (is_array($result) && isset($result['node']) && count($result['node'])) {
+        foreach ($result['node'] as $resNode) {
+          $operations[] = array('fcl_procat_product_import_delete_entities_batch', array($type, $resNode->nid));
+        }
+      }
+    }
+    if ($type == 'fcl_procat_product') { // delete the entity
+      $query = new EntityFieldQuery;
+      $result = $query
+        ->entityCondition('entity_type', 'fcl_procat_product')
+        ->propertyCondition('type', $machineName)
+        ->execute();
+        
+      // Loading existing product entities
+      if (is_array($result) && isset($result['fcl_procat_product']) && count($result['fcl_procat_product'])) {
+        foreach ($result['fcl_procat_product'] as $resNode) {
+          $operations[] = array('fcl_procat_product_import_delete_entities_batch', array($type, $resNode->pid));
+        }
+      }
+    }
+    else if ($type == 'taxonomy_term') { // delete dictionary
+      
+      // @todo check if name exists
+      // get real machine name
+      $vocabs = fcl_procat_product_import_get_vocabularies();
+      if ($machineName != "all") {
+        $vKeys = array($machineName);
+      }
+      else {
+        $vKeys = array_keys($vocabs);
+      }
+
+      // @todo improve with one db call
+      foreach ($vKeys as $vKey) {
+        $vName = $vocabs[$vKey]['vocabulary'];
+        $vocabulary = taxonomy_vocabulary_machine_name_load($vName);
+        if ($vocabulary !== false) {
+          $query = new EntityFieldQuery;
+          $result = $query->entityCondition('entity_type', 'taxonomy_term')
+            ->propertyCondition('vid', $vocabulary->vid)
+            //->fieldCondition('field_sitecat_id', 'value', $parent->id, '=')
+            //->fieldCondition('field_answer_companyref', 'nid', $companyNID, '=')
+            ->execute();
+
+          if (is_array($result) && isset($result['taxonomy_term']) && count($result['taxonomy_term'])) {
+            foreach ($result['taxonomy_term'] as $term) {
+              $operations[] = array('fcl_procat_product_import_delete_entities_batch', array($type, $term->tid));
+            }
+          }
+        }
+      }
+    }
+
+
+    if(count($operations) > 0) { 
+
+      // Create the batch
+      $batch = array(
+        'title' => t('Deleting entities '. $machineName .' of type ' . $type),
+        'operations' => $operations,
+        'progress_message' => t('Current: @current | Remaining:
+          @remaining | Total: @total  (@percentage % complete)'),
+        'init_message' => t('Deleting entities '. $machineName .' of type ' . $type . ' is starting.'),
+        //'finished' => 'fcl_procat_product_import_lists_import_lists_complete',
+      );
+      batch_set($batch);
+      if ($drushCall) {
+        drush_backend_batch_process();
+      }
+      else {
+        batch_process('admin/fcl/procat_product_import');
+      }
+    }
+    else {
+      if ($drushCall) {
+        drush_log('Incorrect parameters', 'error');
+      }
+      else {
+        drupal_set_message('Incorrect parameters');
+        drupal_goto('admin/fcl/procat_product_import');
+      }
+    }
+  }
+
+  /**
+   *  Batch single run deletion of products or terms 
+   *
+   *  @param $type
+   *    String: node or taxonomy_term
+   *  @param $id
+   *    Integer: id of node or taxonomy_term
+   */
+  function fcl_procat_product_import_delete_entities_batch($type, $id) {
+    if ($type == 'node') {
+      node_delete($id);
+    }
+    elseif ($type == 'taxonomy_term') {
+      taxonomy_term_delete($id);
+    }
+    elseif ($type == 'fcl_procat_product') {
+      entity_delete('fcl_procat_product', $id);
+    }
+  }
+
+  /**
+   * Enables / disables list of modules for import
+   *
+   * @param $turnOff
+   *    Booloean: true to switch modules off and false to switch them back on
+   *
+   */
+  function fcl_procat_product_import_switch_module($turnOff = true) {
+    // Importer should disable pathauto module and dependants first.
+    
+    if ($turnOff) {
+      $modules = explode("\n", variable_get('fcl_procat_product_import_disable_modules_list', 'pathauto'));
+      $disableList = array_keys(FCLFeedImporter::getDisableList($modules));
+      // Update if dependacies added
+      if (count($disableList) > count($modules)) {
+        variable_set('fcl_procat_product_import_disable_modules_list', (implode("\n", $disableList)));
+      }
+      module_disable($disableList, FALSE);
+
+    }
+    else {
+      $disableList = explode("\n", variable_get('fcl_procat_product_import_disable_modules_list', 'pathauto'));
+      $toEnable = fcl_procat_product_import_trim_array((array_reverse($disableList, true)));
+      module_enable($toEnable);
+    }
+  }
+
+  /**
+   * Trims strings in array with unnecessary characters
+   *
+   * @param $arrayToTrim
+   *    Array: array with Strings to trip
+   *
+   * @return
+   *    Array: array with trimmed values
+   */
+  function fcl_procat_product_import_trim_array($arrayToTrim) {
+    foreach ($arrayToTrim as $aid => $aElem) {
+      $arrayToTrim[$aid] = trim($aElem);
+    }
+    return $arrayToTrim;
+  }
+
+  /**
+   *  Kicks off a destination structure process.
+   *
+   */
+  function fcl_procat_product_import_structure_destinations(){
+
+    $b = new FclBenchmarker();
+    $b->start();
+
+    $vocabs = fcl_procat_product_import_get_vocabularies();
+    $vocab = $vocabs['place2']['vocabulary'];
+
+    $feedImporter = new FCLFeedListImporter('', $vocab);
+    $feedImporter->structureDestinations();
+
+    $b->setPoint('Structured destinations');
+    watchdog("FCL Lists import Stat", "Batch results - ". $b->getResultsTable() );
+  }
+
+
+  /**
+   * This function formats the last import date and time
+   * for each brand
+   * @param $last_run_array
+   *    - An array of timestamps keyed by brand
+   * @return String
+   *
+   */
+  function _fcl_procat_product_get_last_import_run_text( $last_run_array = array() ){
+
+    $last_run_html = '<strong>Products last imported</strong>: ';
+
+    if(!is_array($last_run_array)){
+      variable_set('fcl_procat_product_import_period_product_lastimport', array());
+      $last_run_html .= 'Never';
+    }else if( count($last_run_array)==0){
+      $last_run_html .= 'Never'; 
+    }else{
+      $last_run_html .= '  <ul>'; 
+      // Last run is an array indexed by brand
+      foreach($last_run_array as $brand => $last_run){
+
+        $last_run_html .= '     <li><b>'.$brand.':</b> '.
+        _fcl_procat_product_get_real_time( $last_run, 'D, d F, Y H:i') . ' </li>';
+      }
+      $last_run_html .= '  </ul>'; 
+    }
+
+    return $last_run_html;
+
+  }
+
+  /**
+   * Resetting all the import related variables to their original values
+   *
+   */
+  function fcl_procat_product_import_reset_vars() {
+
+    variable_set('fcl_procat_product_import_period_product_lastimport', array());
+    variable_set('fcl_procat_product_import_period_list_lastimport', 0);
+    variable_set('fcl_procat_product_import_product_url_prefix', 'http://data.fclmedia.com/nzweb-longtimeout/query');
+    variable_set('fcl_procat_product_import_products_consumer', 'CorporateTravellerAUAllProd');
+    variable_set('fcl_procat_product_import_products_max_number', '500');
+    variable_set('fcl_procat_product_import_products_no_per_batch', '20');
+    variable_set('fcl_procat_product_import_product_option', 'skulist');
+    variable_set('fcl_procat_product_import_product_skulist', 'https://list:ZXvC13!@data.fclmedia.com/pct/rest/list/product/skuList');
+    variable_set('fcl_procat_product_import_cache_location',  $_SERVER['DOCUMENT_ROOT'] . '/sites/default/files/product-import-cache');
+    variable_set('fcl_procat_product_import_cache_max_age',  6*60*60);
+    variable_set('fcl_procat_product_import_product_expires_after', date('Ymd040000', time()) );
+    variable_set('fcl_procat_product_import_products_extra_query', 'Product');
+    variable_set('fcl_procat_product_import_image_download_policy', 'pageview');
+    variable_set('fcl_procat_product_import_custom_image_prefix', 'http://www.fclmedia.com');
+    variable_set('fcl_procat_product_import_product_url_alias', 'product/[sku]');
+    variable_set('fcl_procat_product_import_disable_modules_list', '');
+    variable_set('fcl_procat_product_import_email_admin', '0');
+    variable_set('fcl_procat_product_import_email_admin_list', 'dl.online.web.admin@flightcentre.com.au');
+    variable_set('fcl_procat_product_import_enable_periodic', '1');
+    variable_set('fcl_procat_product_import_time_offset', 20*60);
+    variable_set('fcl_procat_product_import_period_list', 'Hourly');
+    variable_set('fcl_procat_product_import_period_product', 'Hourly');
+    variable_set('fcl_procat_product_import_list_url_prefix', 'https://extract:ZXvC13!@data.fclmedia.com/pct/rest/extract/');
+    variable_set('fcl_procat_product_import_products_max_number', '500');
+    variable_set('fcl_procat_product_import_product_option', 'skulist');
+    variable_set('fcl_procat_product_import_products_consumer', 'FCLAllProd');
+
+    drupal_goto('admin/fcl/procat_product_import');
+
+  }
+
+  function _fcl_procat_product_get_watchdog_identifier() {
+    return 'FCL Import';
+  }
